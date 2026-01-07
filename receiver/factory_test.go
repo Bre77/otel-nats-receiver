@@ -37,7 +37,7 @@ func TestCreateMetricsReceiver(t *testing.T) {
 
 	receiver, err := factory.CreateMetrics(
 		context.Background(),
-		receivertest.NewNopSettings(component.MustNewType("nats")),
+		receivertest.NewNopSettings(),
 		cfg,
 		consumertest.NewNop(),
 	)
@@ -56,7 +56,7 @@ func TestCreateMetricsReceiverWithInvalidConfig(t *testing.T) {
 	// The factory doesn't validate on creation, only on Start
 	receiver, err := factory.CreateMetrics(
 		context.Background(),
-		receivertest.NewNopSettings(component.MustNewType("nats")),
+		receivertest.NewNopSettings(),
 		cfg,
 		consumertest.NewNop(),
 	)
