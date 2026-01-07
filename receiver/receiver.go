@@ -2,8 +2,8 @@ package natsreceiver
 
 import (
 	"context"
-	"errors"
-	"fmt"
+	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -15,17 +15,18 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
-	"go.opentelemetry.io/collector/receiver/scraperhelper"
+	"go.opentelemetry.io/collector/scraper"
+	"go.opentelemetry.io/collector/scraper/scraperhelper"
 	"go.uber.org/zap"
 )
 
 type natsReceiver struct {
-	cfg      *Config
-	settings receiver.Settings
-	consumer consumer.Metrics
-	logger   *zap.Logger
-	scraper  *natsScraper
-	sController *scraperhelper.ScraperController
+	cfg         *Config
+	settings    receiver.Settings
+	consumer    consumer.Metrics
+	logger      *zap.Logger
+	scraper     *natsScraper
+	sController receiver.Metrics
 }
 
 type natsScraper struct {
@@ -58,23 +59,22 @@ func (r *natsReceiver) Start(ctx context.Context, host component.Host) error {
 		return err
 	}
 
-	scraper, err := scraperhelper.NewScraper(
-		typeStr.String(),
+	scrp, err := scraper.NewMetrics(
 		r.scraper.Scrape,
-		scraperhelper.WithStart(r.scraper.Start),
-		scraperhelper.WithShutdown(r.scraper.Shutdown),
+		scraper.WithStart(r.scraper.Start),
+		scraper.WithShutdown(r.scraper.Shutdown),
 	)
 	if err != nil {
 		return err
 	}
 
-	r.sController, err = scraperhelper.NewScraperController(
-		scraperhelper.ControllerConfig{
+	r.sController, err = scraperhelper.NewMetricsController(
+		&scraperhelper.ControllerConfig{
 			CollectionInterval: r.cfg.CollectionInterval,
 		},
 		r.settings,
 		r.consumer,
-		scraperhelper.AddScraper(scraper),
+		scraperhelper.AddScraper(typeStr, scrp),
 	)
 	if err != nil {
 		return err
@@ -99,13 +99,18 @@ func (s *natsScraper) Shutdown(ctx context.Context) error {
 }
 
 func (s *natsScraper) initCollectors() error {
-	// Parse server URL
-	// The original code supports parsing ID from URL or explicit ID.
-	// For now, we assume Endpoint is just the URL and we derive ID or use defaults.
-	// Logic from main.go parseServerIDAndURL could be useful, but simpler here:
 	url := s.cfg.Endpoint
-	id := url // Default ID is URL
-	
+	id := url
+
+	if s.cfg.UseInternalServerID || s.cfg.UseServerName {
+		fetchedID, err := s.getServerID(url)
+		if err != nil {
+			s.logger.Warn("Failed to fetch server ID/Name from varz, using URL as ID", zap.Error(err))
+		} else {
+			id = fetchedID
+		}
+	}
+
 	// Create CollectedServer
 	cs := &collector.CollectedServer{ID: id, URL: url}
 	servers := []*collector.CollectedServer{cs}
@@ -157,15 +162,47 @@ func (s *natsScraper) initCollectors() error {
 
 	// JetStream
 	if s.cfg.GetJszFilter != "" {
-		streamMetaKeys := strings.Split(s.cfg.JszSteamMetaKeys, ",")
-		consumerMetaKeys := strings.Split(s.cfg.JszConsumerMetaKeys, ",")
-		c := collector.NewJszCollector(s.cfg.GetJszFilter, "", servers, streamMetaKeys, consumerMetaKeys)
+		// streamMetaKeys := strings.Split(s.cfg.JszStreamMetaKeys, ",")
+		// consumerMetaKeys := strings.Split(s.cfg.JszConsumerMetaKeys, ",")
+		// v0.18.0 of prometheus-nats-exporter does not support meta keys in NewCollector/newJszCollector
+		c := collector.NewCollector(collector.JetStreamSystem, s.cfg.GetJszFilter, "", servers)
 		if err := s.registry.Register(c); err != nil {
 			s.logger.Warn("Failed to register JSZ collector", zap.Error(err))
 		}
 	}
 
 	return nil
+}
+
+func (s *natsScraper) getServerID(baseURL string) (string, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	// Append /varz to base URL. Handle potential trailing slash.
+	url := strings.TrimRight(baseURL, "/") + "/varz"
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", http.ErrHandlerTimeout // Or some other error
+	}
+
+	var v struct {
+		ServerID   string `json:"server_id"`
+		ServerName string `json:"server_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return "", err
+	}
+
+	if s.cfg.UseServerName && v.ServerName != "" {
+		return v.ServerName, nil
+	}
+	if s.cfg.UseInternalServerID && v.ServerID != "" {
+		return v.ServerID, nil
+	}
+	return "", nil
 }
 
 func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
@@ -183,26 +220,26 @@ func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 	// We can set resource attributes here if we want to associate all metrics with the NATS server.
 	// However, since metrics might have "server_id" label, maybe we don't set a global resource ID
 	// unless we are sure.
-	
+
 	sm := rm.ScopeMetrics().AppendEmpty()
 	sm.Scope().SetName("github.com/nats-io/prometheus-nats-exporter")
 
 	for _, mf := range mfs {
 		name := mf.GetName()
 		// help := mf.GetHelp()
-		
+
 		switch mf.GetType() {
 		case dto.MetricType_GAUGE:
 			m := sm.Metrics().AppendEmpty()
 			m.SetName(name)
 			// m.SetDescription(help)
 			gauge := m.SetEmptyGauge()
-			
+
 			for _, pmetricMetric := range mf.GetMetric() {
 				dp := gauge.DataPoints().AppendEmpty()
 				dp.SetDoubleValue(pmetricMetric.GetGauge().GetValue())
 				dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now())) // or use timestamp if available in pmetricMetric
-				
+
 				if pmetricMetric.TimestampMs != nil {
 					dp.SetTimestamp(pcommon.Timestamp(uint64(*pmetricMetric.TimestampMs) * 1000000))
 				}
@@ -211,7 +248,7 @@ func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 					dp.Attributes().PutStr(label.GetName(), label.GetValue())
 				}
 			}
-		
+
 		case dto.MetricType_COUNTER:
 			m := sm.Metrics().AppendEmpty()
 			m.SetName(name)

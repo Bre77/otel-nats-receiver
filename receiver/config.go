@@ -1,9 +1,8 @@
 package natsreceiver
 
 import (
+	"fmt"
 	"time"
-
-	"go.opentelemetry.io/collector/confmap"
 )
 
 // Config defines configuration for the NATS receiver.
@@ -28,7 +27,7 @@ type Config struct {
 	GetRoutez               bool   `mapstructure:"routez"`
 	GetSubz                 bool   `mapstructure:"subz"`
 	GetJszFilter            string `mapstructure:"jsz"`
-	JszSteamMetaKeys        string `mapstructure:"jsz_stream_meta_keys"`
+	JszStreamMetaKeys       string `mapstructure:"jsz_stream_meta_keys"`
 	JszConsumerMetaKeys     string `mapstructure:"jsz_consumer_meta_keys"`
 
 	// NATS Server Options
@@ -38,10 +37,10 @@ type Config struct {
 
 func (c *Config) Validate() error {
 	if c.Endpoint == "" {
-		return confmap.NewConfigurationCaptureError(nil, "endpoint must be specified")
+		return fmt.Errorf("endpoint must be specified")
 	}
 	if c.CollectionInterval <= 0 {
-		return confmap.NewConfigurationCaptureError(nil, "collection_interval must be positive")
+		return fmt.Errorf("collection_interval must be positive")
 	}
 	return nil
 }
