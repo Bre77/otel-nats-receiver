@@ -1,0 +1,57 @@
+receivers:
+  nats:
+    # NATS server monitoring endpoint (required)
+    endpoint: http://localhost:8222
+
+    # How often to collect metrics (default: 60s)
+    collection_interval: 30s
+
+    # Core server metrics
+    varz: true              # General server stats (default: true)
+    connz: true             # Connection info
+    connz_detailed: false   # Detailed connection info (more overhead)
+    routez: true            # Route info for clustered servers
+    subz: false             # Subscription info
+    leafz: false            # Leaf node info
+    gatewayz: false         # Gateway info for super-clusters
+
+    # Health check metrics
+    healthz: true           # Basic health status
+
+    # Account metrics
+    accstatz: false         # Account stats
+    accountz: false         # Account info
+
+    # JetStream metrics (set to filter value or empty to disable)
+    # Options: "all", "streams", "consumers", or specific stream name
+    jsz: "all"
+
+    # Server identification (useful when monitoring multiple servers)
+    use_internal_server_id: false   # Use server_id from /varz
+    use_internal_server_name: true  # Use server_name from /varz
+
+processors:
+  batch:
+    timeout: 10s
+
+exporters:
+  debug:
+    verbosity: detailed
+
+  # Example: Send to another OTLP endpoint
+  # otlp:
+  #   endpoint: localhost:4317
+  #   tls:
+  #     insecure: true
+
+extensions:
+  zpages:
+    endpoint: localhost:55679
+
+service:
+  extensions: [zpages]
+  pipelines:
+    metrics:
+      receivers: [nats]
+      processors: [batch]
+      exporters: [debug]
