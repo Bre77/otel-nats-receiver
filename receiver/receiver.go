@@ -3,6 +3,7 @@ package natsreceiver
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -161,13 +162,10 @@ func (s *natsScraper) initCollectors() error {
 	}
 
 	// JetStream
-	if s.cfg.GetJszFilter != "" {
-		// streamMetaKeys := strings.Split(s.cfg.JszStreamMetaKeys, ",")
-		// consumerMetaKeys := strings.Split(s.cfg.JszConsumerMetaKeys, ",")
-		// v0.18.0 of prometheus-nats-exporter does not support meta keys in NewCollector/newJszCollector
-		c := collector.NewCollector(collector.JetStreamSystem, s.cfg.GetJszFilter, "", servers)
+	if s.cfg.GetJsz != "" {
+		c := collector.NewCollector(collector.JetStreamSystem, s.cfg.GetJsz, "", servers)
 		if err := s.registry.Register(c); err != nil {
-			s.logger.Warn("Failed to register JSZ collector", zap.Error(err))
+			s.logger.Warn("Failed to register JetStream collector", zap.Error(err))
 		}
 	}
 
@@ -185,7 +183,7 @@ func (s *natsScraper) getServerID(baseURL string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", http.ErrHandlerTimeout // Or some other error
+		return "", fmt.Errorf("unexpected status code %d from %s", resp.StatusCode, url)
 	}
 
 	var v struct {
@@ -206,7 +204,6 @@ func (s *natsScraper) getServerID(baseURL string) (string, error) {
 }
 
 func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
-	// Gather metrics from Prometheus registry
 	mfs, err := s.registry.Gather()
 	if err != nil {
 		if len(mfs) == 0 {
@@ -217,64 +214,138 @@ func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 
 	md := pmetric.NewMetrics()
 	rm := md.ResourceMetrics().AppendEmpty()
-	// We can set resource attributes here if we want to associate all metrics with the NATS server.
-	// However, since metrics might have "server_id" label, maybe we don't set a global resource ID
-	// unless we are sure.
+	rm.Resource().Attributes().PutStr("service.name", "nats")
 
 	sm := rm.ScopeMetrics().AppendEmpty()
-	sm.Scope().SetName("github.com/nats-io/prometheus-nats-exporter")
+	sm.Scope().SetName("github.com/Bre77/otel-nats-receiver")
+	sm.Scope().SetVersion("0.1.0")
+
+	now := pcommon.NewTimestampFromTime(time.Now())
 
 	for _, mf := range mfs {
 		name := mf.GetName()
-		// help := mf.GetHelp()
+		help := mf.GetHelp()
 
 		switch mf.GetType() {
 		case dto.MetricType_GAUGE:
-			m := sm.Metrics().AppendEmpty()
-			m.SetName(name)
-			// m.SetDescription(help)
-			gauge := m.SetEmptyGauge()
-
-			for _, pmetricMetric := range mf.GetMetric() {
-				dp := gauge.DataPoints().AppendEmpty()
-				dp.SetDoubleValue(pmetricMetric.GetGauge().GetValue())
-				dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now())) // or use timestamp if available in pmetricMetric
-
-				if pmetricMetric.TimestampMs != nil {
-					dp.SetTimestamp(pcommon.Timestamp(uint64(*pmetricMetric.TimestampMs) * 1000000))
-				}
-
-				for _, label := range pmetricMetric.GetLabel() {
-					dp.Attributes().PutStr(label.GetName(), label.GetValue())
-				}
-			}
+			s.convertGauge(sm, name, help, mf.GetMetric(), now)
 
 		case dto.MetricType_COUNTER:
-			m := sm.Metrics().AppendEmpty()
-			m.SetName(name)
-			// m.SetDescription(help)
-			sum := m.SetEmptySum()
-			sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
-			sum.SetIsMonotonic(true) // Prometheus counters are monotonic
+			s.convertCounter(sm, name, help, mf.GetMetric(), now)
 
-			for _, pmetricMetric := range mf.GetMetric() {
-				dp := sum.DataPoints().AppendEmpty()
-				dp.SetDoubleValue(pmetricMetric.GetCounter().GetValue())
-				dp.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+		case dto.MetricType_HISTOGRAM:
+			s.convertHistogram(sm, name, help, mf.GetMetric(), now)
 
-				if pmetricMetric.TimestampMs != nil {
-					dp.SetTimestamp(pcommon.Timestamp(uint64(*pmetricMetric.TimestampMs) * 1000000))
-				}
+		case dto.MetricType_SUMMARY:
+			s.convertSummary(sm, name, help, mf.GetMetric(), now)
 
-				for _, label := range pmetricMetric.GetLabel() {
-					dp.Attributes().PutStr(label.GetName(), label.GetValue())
-				}
-			}
+		case dto.MetricType_UNTYPED:
+			// Treat untyped as gauge
+			s.convertGauge(sm, name, help, mf.GetMetric(), now)
 
 		default:
-			// Handle other types or skip
+			s.logger.Debug("Skipping unsupported metric type", zap.String("name", name), zap.String("type", mf.GetType().String()))
 		}
 	}
 
 	return md, nil
+}
+
+func (s *natsScraper) convertGauge(sm pmetric.ScopeMetrics, name, description string, metrics []*dto.Metric, defaultTimestamp pcommon.Timestamp) {
+	m := sm.Metrics().AppendEmpty()
+	m.SetName(name)
+	m.SetDescription(description)
+	gauge := m.SetEmptyGauge()
+
+	for _, pm := range metrics {
+		dp := gauge.DataPoints().AppendEmpty()
+		dp.SetDoubleValue(pm.GetGauge().GetValue())
+		s.setTimestamp(dp, pm, defaultTimestamp)
+		s.setLabels(dp, pm.GetLabel())
+	}
+}
+
+func (s *natsScraper) convertCounter(sm pmetric.ScopeMetrics, name, description string, metrics []*dto.Metric, defaultTimestamp pcommon.Timestamp) {
+	m := sm.Metrics().AppendEmpty()
+	m.SetName(name)
+	m.SetDescription(description)
+	sum := m.SetEmptySum()
+	sum.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+	sum.SetIsMonotonic(true)
+
+	for _, pm := range metrics {
+		dp := sum.DataPoints().AppendEmpty()
+		dp.SetDoubleValue(pm.GetCounter().GetValue())
+		s.setTimestamp(dp, pm, defaultTimestamp)
+		s.setLabels(dp, pm.GetLabel())
+	}
+}
+
+func (s *natsScraper) convertHistogram(sm pmetric.ScopeMetrics, name, description string, metrics []*dto.Metric, defaultTimestamp pcommon.Timestamp) {
+	m := sm.Metrics().AppendEmpty()
+	m.SetName(name)
+	m.SetDescription(description)
+	hist := m.SetEmptyHistogram()
+	hist.SetAggregationTemporality(pmetric.AggregationTemporalityCumulative)
+
+	for _, pm := range metrics {
+		h := pm.GetHistogram()
+		dp := hist.DataPoints().AppendEmpty()
+		dp.SetCount(h.GetSampleCount())
+		dp.SetSum(h.GetSampleSum())
+		s.setTimestamp(dp, pm, defaultTimestamp)
+		s.setLabels(dp, pm.GetLabel())
+
+		// Convert buckets
+		buckets := h.GetBucket()
+		dp.ExplicitBounds().EnsureCapacity(len(buckets))
+		dp.BucketCounts().EnsureCapacity(len(buckets) + 1)
+
+		var prevCount uint64
+		for _, b := range buckets {
+			dp.ExplicitBounds().Append(b.GetUpperBound())
+			// Convert cumulative to delta counts
+			dp.BucketCounts().Append(b.GetCumulativeCount() - prevCount)
+			prevCount = b.GetCumulativeCount()
+		}
+	}
+}
+
+func (s *natsScraper) convertSummary(sm pmetric.ScopeMetrics, name, description string, metrics []*dto.Metric, defaultTimestamp pcommon.Timestamp) {
+	m := sm.Metrics().AppendEmpty()
+	m.SetName(name)
+	m.SetDescription(description)
+	summary := m.SetEmptySummary()
+
+	for _, pm := range metrics {
+		su := pm.GetSummary()
+		dp := summary.DataPoints().AppendEmpty()
+		dp.SetCount(su.GetSampleCount())
+		dp.SetSum(su.GetSampleSum())
+		s.setTimestamp(dp, pm, defaultTimestamp)
+		s.setLabels(dp, pm.GetLabel())
+
+		// Convert quantiles
+		for _, q := range su.GetQuantile() {
+			qv := dp.QuantileValues().AppendEmpty()
+			qv.SetQuantile(q.GetQuantile())
+			qv.SetValue(q.GetValue())
+		}
+	}
+}
+
+// setTimestamp sets the timestamp on a data point, using the metric's timestamp if available
+func (s *natsScraper) setTimestamp(dp interface{ SetTimestamp(pcommon.Timestamp) }, pm *dto.Metric, defaultTimestamp pcommon.Timestamp) {
+	if pm.TimestampMs != nil {
+		dp.SetTimestamp(pcommon.Timestamp(uint64(*pm.TimestampMs) * 1_000_000))
+	} else {
+		dp.SetTimestamp(defaultTimestamp)
+	}
+}
+
+// setLabels copies Prometheus labels to OTel attributes
+func (s *natsScraper) setLabels(dp interface{ Attributes() pcommon.Map }, labels []*dto.LabelPair) {
+	for _, label := range labels {
+		dp.Attributes().PutStr(label.GetName(), label.GetValue())
+	}
 }
