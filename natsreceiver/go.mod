@@ -1,8 +1,6 @@
-module github.com/Bre77/otel-nats-receiver
+module github.com/Bre77/otel-nats-receiver/natsreceiver
 
-go 1.24.1
-
-toolchain go1.24.7
+go 1.25.5
 
 require (
 	github.com/nats-io/prometheus-nats-exporter v0.18.0

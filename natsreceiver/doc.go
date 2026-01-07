@@ -21,7 +21,7 @@
 // OpenTelemetry Collector Builder (ocb) with the provided builder-config.yaml,
 // or import the receiver directly:
 //
-//	import "github.com/Bre77/otel-nats-receiver/receiver"
+//	import "github.com/Bre77/otel-nats-receiver/natsreceiver"
 //
-//	factory := receiver.NewFactory()
+//	factory := natsreceiver.NewFactory()
 package natsreceiver
