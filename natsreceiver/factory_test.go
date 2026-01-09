@@ -28,7 +28,7 @@ func TestCreateDefaultConfig(t *testing.T) {
 
 	assert.Equal(t, "http://localhost:8222", natsConfig.Endpoint)
 	assert.Equal(t, 60*time.Second, natsConfig.CollectionInterval)
-	assert.True(t, natsConfig.GetVarz)
+	assert.True(t, natsConfig.GetVarz.Enabled)
 }
 
 func TestCreateMetricsReceiver(t *testing.T) {

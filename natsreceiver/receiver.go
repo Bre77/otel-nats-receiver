@@ -124,40 +124,40 @@ func (s *natsScraper) initCollectors() error {
 		}
 	}
 
-	if s.cfg.GetVarz {
+	if s.cfg.GetVarz.Enabled {
 		register(collector.CoreSystem, "varz")
 	}
-	if s.cfg.GetConnz {
+	if s.cfg.GetConnz.Enabled {
 		register(collector.CoreSystem, "connz")
 	}
-	if s.cfg.GetConnzDetailed {
+	if s.cfg.GetConnzDetailed.Enabled {
 		register(collector.CoreSystem, "connz_detailed")
 	}
-	if s.cfg.GetHealthz {
+	if s.cfg.GetHealthz.Enabled {
 		register(collector.CoreSystem, "healthz")
 	}
-	if s.cfg.GetHealthzJsEnabledOnly {
+	if s.cfg.GetHealthzJsEnabledOnly.Enabled {
 		register(collector.CoreSystem, "healthz_js_enabled_only")
 	}
-	if s.cfg.GetHealthzJsServerOnly {
+	if s.cfg.GetHealthzJsServerOnly.Enabled {
 		register(collector.CoreSystem, "healthz_js_server_only")
 	}
-	if s.cfg.GetGatewayz {
+	if s.cfg.GetGatewayz.Enabled {
 		register(collector.CoreSystem, "gatewayz")
 	}
-	if s.cfg.GetAccstatz {
+	if s.cfg.GetAccstatz.Enabled {
 		register(collector.CoreSystem, "accstatz")
 	}
-	if s.cfg.GetAccountz {
+	if s.cfg.GetAccountz.Enabled {
 		register(collector.CoreSystem, "accountz")
 	}
-	if s.cfg.GetLeafz {
+	if s.cfg.GetLeafz.Enabled {
 		register(collector.CoreSystem, "leafz")
 	}
-	if s.cfg.GetRoutez {
+	if s.cfg.GetRoutez.Enabled {
 		register(collector.CoreSystem, "routez")
 	}
-	if s.cfg.GetSubz {
+	if s.cfg.GetSubz.Enabled {
 		register(collector.CoreSystem, "subz")
 	}
 
@@ -203,6 +203,64 @@ func (s *natsScraper) getServerID(baseURL string) (string, error) {
 	return "", nil
 }
 
+// metricPrefixes maps metric name prefixes to their config field names
+var metricPrefixes = []struct {
+	prefix string
+	field  string
+}{
+	{"gnatsd_varz_", "varz"},
+	{"gnatsd_connz_", "connz"},
+	{"gnatsd_routez_", "routez"},
+	{"gnatsd_subz_", "subz"},
+	{"gnatsd_leafz_", "leafz"},
+	{"gnatsd_gatewayz_", "gatewayz"},
+	{"gnatsd_healthz_", "healthz"},
+	{"gnatsd_accstatz_", "accstatz"},
+	{"gnatsd_accountz_", "accountz"},
+	{"gnatsd_jsz_", "jsz"},
+}
+
+// shouldCollectMetric checks if a metric should be collected based on its name and the config filters.
+func (s *natsScraper) shouldCollectMetric(name string) bool {
+	for _, p := range metricPrefixes {
+		if strings.HasPrefix(name, p.prefix) {
+			suffix := strings.TrimPrefix(name, p.prefix)
+			filter := s.getFilterForField(p.field)
+			if filter == nil {
+				return true // no filter, collect all
+			}
+			return filter.ShouldCollect(suffix)
+		}
+	}
+	return true // unknown prefix, collect by default
+}
+
+// getFilterForField returns the MetricFilter for a given field name.
+func (s *natsScraper) getFilterForField(field string) *MetricFilter {
+	switch field {
+	case "varz":
+		return &s.cfg.GetVarz
+	case "connz":
+		return &s.cfg.GetConnz
+	case "routez":
+		return &s.cfg.GetRoutez
+	case "subz":
+		return &s.cfg.GetSubz
+	case "leafz":
+		return &s.cfg.GetLeafz
+	case "gatewayz":
+		return &s.cfg.GetGatewayz
+	case "healthz":
+		return &s.cfg.GetHealthz
+	case "accstatz":
+		return &s.cfg.GetAccstatz
+	case "accountz":
+		return &s.cfg.GetAccountz
+	default:
+		return nil
+	}
+}
+
 func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 	mfs, err := s.registry.Gather()
 	if err != nil {
@@ -224,6 +282,12 @@ func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 
 	for _, mf := range mfs {
 		name := mf.GetName()
+
+		// Check if this metric should be collected based on filters
+		if !s.shouldCollectMetric(name) {
+			continue
+		}
+
 		help := mf.GetHelp()
 
 		switch mf.GetType() {

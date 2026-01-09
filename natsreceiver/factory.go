@@ -25,7 +25,7 @@ func createDefaultConfig() component.Config {
 	return &Config{
 		Endpoint:           "http://localhost:8222",
 		CollectionInterval: 60 * time.Second,
-		GetVarz:            true,
+		GetVarz:            MetricFilter{Enabled: true},
 	}
 }
 

@@ -1,34 +1,44 @@
 receivers:
   nats:
     # NATS server monitoring endpoint (required)
-    endpoint: http://localhost:8222
+    endpoint: http://192.168.1.6:8222
 
     # How often to collect metrics (default: 60s)
     collection_interval: 30s
 
+    # Each endpoint can be configured as:
+    # - true: collect all metrics from this endpoint
+    # - false: collect no metrics from this endpoint (default for most)
+    # - list: collect only the specified metrics (prefix stripped)
+    #
+    # Example with list (only collect mem and cpu from varz):
+    # varz:
+    #   - mem
+    #   - cpu
+
     # Core server metrics
-    varz: true              # General server stats (default: true)
-    connz: true             # Connection info
-    connz_detailed: false   # Detailed connection info (more overhead)
-    routez: true            # Route info for clustered servers
-    subz: false             # Subscription info
-    leafz: false            # Leaf node info
-    gatewayz: false         # Gateway info for super-clusters
+    varz: true # General server stats (default: true)
+    connz: true # Connection info
+    connz_detailed: false # Detailed connection info (more overhead)
+    routez: true # Route info for clustered servers
+    subz: false # Subscription info
+    leafz: false # Leaf node info
+    gatewayz: false # Gateway info for super-clusters
 
     # Health check metrics
-    healthz: true           # Basic health status
+    healthz: true # Basic health status
 
     # Account metrics
-    accstatz: false         # Account stats
-    accountz: false         # Account info
+    accstatz: false # Account stats
+    accountz: false # Account info
 
     # JetStream metrics (set to filter value or empty to disable)
     # Options: "all", "streams", "consumers", or specific stream name
     jsz: "all"
 
     # Server identification (useful when monitoring multiple servers)
-    use_internal_server_id: false   # Use server_id from /varz
-    use_internal_server_name: true  # Use server_name from /varz
+    use_internal_server_id: false # Use server_id from /varz
+    use_internal_server_name: true # Use server_name from /varz
 
 processors:
   batch:
@@ -49,6 +59,9 @@ extensions:
     endpoint: localhost:55679
 
 service:
+  telemetry:
+    metrics:
+      level: none
   extensions: [zpages]
   pipelines:
     metrics:
