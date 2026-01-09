@@ -9,9 +9,12 @@ receivers:
     # Each endpoint can be configured as:
     # - true: collect all metrics from this endpoint
     # - false: collect no metrics from this endpoint (default for most)
-    # - list: collect only the specified metrics (prefix stripped)
+    # - list: collect only the specified metrics (suffix only)
     #
-    # Example with list (only collect mem and cpu from varz):
+    # Metrics are renamed to OTel format: nats.<endpoint>.<metric>
+    # e.g., gnatsd_varz_cpu -> nats.varz.cpu
+    #
+    # Example with list (only collect nats.varz.mem and nats.varz.cpu):
     # varz:
     #   - mem
     #   - cpu

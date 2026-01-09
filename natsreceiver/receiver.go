@@ -203,28 +203,29 @@ func (s *natsScraper) getServerID(baseURL string) (string, error) {
 	return "", nil
 }
 
-// metricPrefixes maps metric name prefixes to their config field names
+// metricPrefixes maps metric name prefixes to their config field names and OTel prefix
 var metricPrefixes = []struct {
-	prefix string
-	field  string
+	oldPrefix string // e.g., "gnatsd_varz_"
+	newPrefix string // e.g., "nats.varz."
+	field     string // config field name
 }{
-	{"gnatsd_varz_", "varz"},
-	{"gnatsd_connz_", "connz"},
-	{"gnatsd_routez_", "routez"},
-	{"gnatsd_subz_", "subz"},
-	{"gnatsd_leafz_", "leafz"},
-	{"gnatsd_gatewayz_", "gatewayz"},
-	{"gnatsd_healthz_", "healthz"},
-	{"gnatsd_accstatz_", "accstatz"},
-	{"gnatsd_accountz_", "accountz"},
-	{"gnatsd_jsz_", "jsz"},
+	{"gnatsd_varz_", "nats.varz.", "varz"},
+	{"gnatsd_connz_", "nats.connz.", "connz"},
+	{"gnatsd_routez_", "nats.routez.", "routez"},
+	{"gnatsd_subz_", "nats.subz.", "subz"},
+	{"gnatsd_leafz_", "nats.leafz.", "leafz"},
+	{"gnatsd_gatewayz_", "nats.gatewayz.", "gatewayz"},
+	{"gnatsd_healthz_", "nats.healthz.", "healthz"},
+	{"gnatsd_accstatz_", "nats.accstatz.", "accstatz"},
+	{"gnatsd_accountz_", "nats.accountz.", "accountz"},
+	{"gnatsd_jsz_", "nats.jsz.", "jsz"},
 }
 
 // shouldCollectMetric checks if a metric should be collected based on its name and the config filters.
 func (s *natsScraper) shouldCollectMetric(name string) bool {
 	for _, p := range metricPrefixes {
-		if strings.HasPrefix(name, p.prefix) {
-			suffix := strings.TrimPrefix(name, p.prefix)
+		if strings.HasPrefix(name, p.oldPrefix) {
+			suffix := strings.TrimPrefix(name, p.oldPrefix)
 			filter := s.getFilterForField(p.field)
 			if filter == nil {
 				return true // no filter, collect all
@@ -233,6 +234,18 @@ func (s *natsScraper) shouldCollectMetric(name string) bool {
 		}
 	}
 	return true // unknown prefix, collect by default
+}
+
+// transformMetricName converts legacy gnatsd_ prefixed names to OTel-compliant nats. names.
+// e.g., "gnatsd_varz_cpu" -> "nats.varz.cpu"
+func transformMetricName(name string) string {
+	for _, p := range metricPrefixes {
+		if strings.HasPrefix(name, p.oldPrefix) {
+			suffix := strings.TrimPrefix(name, p.oldPrefix)
+			return p.newPrefix + suffix
+		}
+	}
+	return name // return unchanged if no prefix matches
 }
 
 // getFilterForField returns the MetricFilter for a given field name.
@@ -281,13 +294,15 @@ func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 	now := pcommon.NewTimestampFromTime(time.Now())
 
 	for _, mf := range mfs {
-		name := mf.GetName()
+		originalName := mf.GetName()
 
 		// Check if this metric should be collected based on filters
-		if !s.shouldCollectMetric(name) {
+		if !s.shouldCollectMetric(originalName) {
 			continue
 		}
 
+		// Transform to OTel-compliant name (e.g., gnatsd_varz_cpu -> nats.varz.cpu)
+		name := transformMetricName(originalName)
 		help := mf.GetHelp()
 
 		switch mf.GetType() {
