@@ -117,6 +117,10 @@ type Config struct {
 	// Server identification options
 	UseInternalServerID bool `mapstructure:"use_internal_server_id"`   // Use server_id from varz as identifier
 	UseServerName       bool `mapstructure:"use_internal_server_name"` // Use server_name from varz as identifier
+
+	// Startup and config reload logging
+	StartupLog bool `mapstructure:"startup_log"` // Emit log on initial connection (default: true)
+	ConfigLog  bool `mapstructure:"config_log"`  // Emit log when server config reloads (default: true)
 }
 
 // Validate checks if the configuration is valid.

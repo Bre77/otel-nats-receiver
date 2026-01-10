@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/prometheus-nats-exporter/collector"
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/consumer"
 	"go.opentelemetry.io/collector/pdata/pcommon"
+	"go.opentelemetry.io/collector/pdata/plog"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.opentelemetry.io/collector/receiver"
 	"go.opentelemetry.io/collector/scraper"
@@ -21,31 +23,53 @@ import (
 	"go.uber.org/zap"
 )
 
+// varzResponse contains the NATS server information from /varz endpoint
+type varzResponse struct {
+	ServerID       string `json:"server_id"`
+	ServerName     string `json:"server_name"`
+	Version        string `json:"version"`
+	Host           string `json:"host"`
+	Port           int    `json:"port"`
+	Cluster        *struct {
+		Name string `json:"name"`
+	} `json:"cluster,omitempty"`
+	JetStream      bool      `json:"jetstream"`
+	MaxConnections int       `json:"max_connections"`
+	MaxPayload     int       `json:"max_payload"`
+	ConfigLoadTime time.Time `json:"config_load_time"`
+}
+
 type natsReceiver struct {
-	cfg         *Config
-	settings    receiver.Settings
-	consumer    consumer.Metrics
-	logger      *zap.Logger
-	scraper     *natsScraper
-	sController receiver.Metrics
+	cfg                *Config
+	settings           receiver.Settings
+	metricsConsumer    consumer.Metrics
+	logsConsumer       consumer.Logs
+	logger             *zap.Logger
+	scraper            *natsScraper
+	sController        receiver.Metrics
+	lastConfigLoadTime time.Time
+	configMu           sync.Mutex
 }
 
 type natsScraper struct {
 	cfg      *Config
 	logger   *zap.Logger
 	registry *prometheus.Registry
+	receiver *natsReceiver
 }
 
 func newNatsReceiver(
 	params receiver.Settings,
 	cfg *Config,
-	consumer consumer.Metrics,
-) receiver.Metrics {
+	metricsConsumer consumer.Metrics,
+	logsConsumer consumer.Logs,
+) *natsReceiver {
 	return &natsReceiver{
-		cfg:      cfg,
-		settings: params,
-		consumer: consumer,
-		logger:   params.Logger,
+		cfg:             cfg,
+		settings:        params,
+		metricsConsumer: metricsConsumer,
+		logsConsumer:    logsConsumer,
+		logger:          params.Logger,
 	}
 }
 
@@ -54,34 +78,55 @@ func (r *natsReceiver) Start(ctx context.Context, host component.Host) error {
 		cfg:      r.cfg,
 		logger:   r.logger,
 		registry: prometheus.NewRegistry(),
+		receiver: r,
 	}
 
 	if err := r.scraper.initCollectors(); err != nil {
 		return err
 	}
 
-	scrp, err := scraper.NewMetrics(
-		r.scraper.Scrape,
-		scraper.WithStart(r.scraper.Start),
-		scraper.WithShutdown(r.scraper.Shutdown),
-	)
-	if err != nil {
-		return err
+	// Emit startup log if enabled and logs consumer is available
+	if r.cfg.StartupLog && r.logsConsumer != nil {
+		varz, err := r.fetchVarz()
+		if err != nil {
+			r.logger.Warn("Failed to fetch varz for startup log", zap.Error(err))
+		} else {
+			r.configMu.Lock()
+			r.lastConfigLoadTime = varz.ConfigLoadTime
+			r.configMu.Unlock()
+			if err := r.emitLog(ctx, varz, "NATS server connected"); err != nil {
+				r.logger.Warn("Failed to emit startup log", zap.Error(err))
+			}
+		}
 	}
 
-	r.sController, err = scraperhelper.NewMetricsController(
-		&scraperhelper.ControllerConfig{
-			CollectionInterval: r.cfg.CollectionInterval,
-		},
-		r.settings,
-		r.consumer,
-		scraperhelper.AddScraper(typeStr, scrp),
-	)
-	if err != nil {
-		return err
+	// Only start metrics controller if metrics consumer is available
+	if r.metricsConsumer != nil {
+		scrp, err := scraper.NewMetrics(
+			r.scraper.Scrape,
+			scraper.WithStart(r.scraper.Start),
+			scraper.WithShutdown(r.scraper.Shutdown),
+		)
+		if err != nil {
+			return err
+		}
+
+		r.sController, err = scraperhelper.NewMetricsController(
+			&scraperhelper.ControllerConfig{
+				CollectionInterval: r.cfg.CollectionInterval,
+			},
+			r.settings,
+			r.metricsConsumer,
+			scraperhelper.AddScraper(typeStr, scrp),
+		)
+		if err != nil {
+			return err
+		}
+
+		return r.sController.Start(ctx, host)
 	}
 
-	return r.sController.Start(ctx, host)
+	return nil
 }
 
 func (r *natsReceiver) Shutdown(ctx context.Context) error {
@@ -91,12 +136,100 @@ func (r *natsReceiver) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// fetchVarz retrieves the full varz response from the NATS server
+func (r *natsReceiver) fetchVarz() (*varzResponse, error) {
+	client := &http.Client{Timeout: 5 * time.Second}
+	url := strings.TrimRight(r.cfg.Endpoint, "/") + "/varz"
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code %d from %s", resp.StatusCode, url)
+	}
+
+	var v varzResponse
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
+// emitLog creates and sends an OpenTelemetry log record with NATS server information
+func (r *natsReceiver) emitLog(ctx context.Context, varz *varzResponse, message string) error {
+	ld := plog.NewLogs()
+	rl := ld.ResourceLogs().AppendEmpty()
+
+	// Set resource attributes (OTel semantic conventions)
+	res := rl.Resource()
+	res.Attributes().PutStr("service.name", "nats")
+	res.Attributes().PutStr("service.instance.id", varz.ServerID)
+	res.Attributes().PutStr("service.version", varz.Version)
+	res.Attributes().PutStr("host.name", varz.ServerName)
+
+	sl := rl.ScopeLogs().AppendEmpty()
+	sl.Scope().SetName("github.com/Bre77/otel-nats-receiver")
+	sl.Scope().SetVersion("0.1.0")
+
+	lr := sl.LogRecords().AppendEmpty()
+	lr.SetTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	lr.SetObservedTimestamp(pcommon.NewTimestampFromTime(time.Now()))
+	lr.SetSeverityNumber(plog.SeverityNumberInfo)
+	lr.SetSeverityText("INFO")
+	lr.Body().SetStr(message)
+
+	// Set log attributes
+	attrs := lr.Attributes()
+	attrs.PutStr("host", varz.Host)
+	attrs.PutInt("port", int64(varz.Port))
+	attrs.PutBool("jetstream.enabled", varz.JetStream)
+	attrs.PutInt("max_connections", int64(varz.MaxConnections))
+	attrs.PutInt("max_payload", int64(varz.MaxPayload))
+	attrs.PutStr("config_load_time", varz.ConfigLoadTime.Format(time.RFC3339))
+	if varz.Cluster != nil && varz.Cluster.Name != "" {
+		attrs.PutStr("cluster.name", varz.Cluster.Name)
+	}
+
+	return r.logsConsumer.ConsumeLogs(ctx, ld)
+}
+
 func (s *natsScraper) Start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
 func (s *natsScraper) Shutdown(ctx context.Context) error {
 	return nil
+}
+
+// checkConfigReload checks if the NATS server config has been reloaded and emits a log if so
+func (s *natsScraper) checkConfigReload(ctx context.Context) {
+	varz, err := s.receiver.fetchVarz()
+	if err != nil {
+		s.logger.Debug("Failed to fetch varz for config reload check", zap.Error(err))
+		return
+	}
+
+	s.receiver.configMu.Lock()
+	lastTime := s.receiver.lastConfigLoadTime
+	s.receiver.configMu.Unlock()
+
+	// Only emit log if we have a previous time and it has changed
+	if !lastTime.IsZero() && !varz.ConfigLoadTime.Equal(lastTime) {
+		s.receiver.configMu.Lock()
+		s.receiver.lastConfigLoadTime = varz.ConfigLoadTime
+		s.receiver.configMu.Unlock()
+
+		if err := s.receiver.emitLog(ctx, varz, "NATS server configuration reloaded"); err != nil {
+			s.logger.Warn("Failed to emit config reload log", zap.Error(err))
+		}
+	} else if lastTime.IsZero() {
+		// Initialize the last config load time if not set (e.g., startup_log was disabled)
+		s.receiver.configMu.Lock()
+		s.receiver.lastConfigLoadTime = varz.ConfigLoadTime
+		s.receiver.configMu.Unlock()
+	}
 }
 
 func (s *natsScraper) initCollectors() error {
@@ -275,6 +408,11 @@ func (s *natsScraper) getFilterForField(field string) *MetricFilter {
 }
 
 func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
+	// Check for config reload if enabled
+	if s.cfg.ConfigLog && s.receiver != nil && s.receiver.logsConsumer != nil {
+		s.checkConfigReload(ctx)
+	}
+
 	mfs, err := s.registry.Gather()
 	if err != nil {
 		if len(mfs) == 0 {

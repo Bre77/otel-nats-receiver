@@ -43,6 +43,10 @@ receivers:
     use_internal_server_id: false # Use server_id from /varz
     use_internal_server_name: true # Use server_name from /varz
 
+    # Startup and config reload logging (emits OTel log records)
+    startup_log: true # Emit log on initial connection (default: true)
+    config_log: true  # Emit log when server config reloads (default: true)
+
 processors:
   batch:
     timeout: 10s
@@ -68,6 +72,10 @@ service:
   extensions: [zpages]
   pipelines:
     metrics:
+      receivers: [nats]
+      processors: [batch]
+      exporters: [debug]
+    logs:
       receivers: [nats]
       processors: [batch]
       exporters: [debug]
