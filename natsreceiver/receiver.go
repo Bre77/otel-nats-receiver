@@ -33,7 +33,7 @@ type varzResponse struct {
 	Cluster        *struct {
 		Name string `json:"name"`
 	} `json:"cluster,omitempty"`
-	JetStream      bool      `json:"jetstream"`
+	JetStream      any       `json:"jetstream"` // bool when disabled, object when enabled
 	MaxConnections int       `json:"max_connections"`
 	MaxPayload     int       `json:"max_payload"`
 	ConfigLoadTime time.Time `json:"config_load_time"`
@@ -184,7 +184,7 @@ func (r *natsReceiver) emitLog(ctx context.Context, varz *varzResponse, message 
 	attrs := lr.Attributes()
 	attrs.PutStr("host", varz.Host)
 	attrs.PutInt("port", int64(varz.Port))
-	attrs.PutBool("jetstream.enabled", varz.JetStream)
+	attrs.PutBool("jetstream.enabled", varz.JetStream != nil && varz.JetStream != false)
 	attrs.PutInt("max_connections", int64(varz.MaxConnections))
 	attrs.PutInt("max_payload", int64(varz.MaxPayload))
 	attrs.PutStr("config_load_time", varz.ConfigLoadTime.Format(time.RFC3339))

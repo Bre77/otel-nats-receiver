@@ -9,8 +9,8 @@ import (
 // MetricFilter configures which metrics to collect from an endpoint.
 // It can be unmarshaled from either a boolean or a list of metric names.
 type MetricFilter struct {
-	Enabled bool     // Whether to collect from this endpoint
-	Metrics []string // If non-empty, only collect these metrics (suffix only, prefix stripped)
+	Enabled bool     `mapstructure:"enabled"` // Whether to collect from this endpoint
+	Metrics []string `mapstructure:"metrics"` // If non-empty, only collect these metrics (suffix only, prefix stripped)
 }
 
 // UnmarshalJSON handles both boolean and array inputs.
