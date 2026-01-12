@@ -42,6 +42,30 @@ ocb --config builder-config.yaml
 
 ## Configuration
 
+### Endpoint Options
+
+Each endpoint option (except `jsz`) accepts one of three value types:
+
+| Value | Behavior |
+|-------|----------|
+| `true` | Collect all metrics from this endpoint |
+| `false` | Disable this endpoint (default for most) |
+| `["suffix1", "suffix2"]` | Collect only metrics matching these suffixes |
+
+Example showing all three forms:
+
+```yaml
+receivers:
+  nats:
+    endpoint: http://localhost:8222
+
+    varz: true              # Collect all varz metrics
+    connz: false            # Disable connz entirely
+    routez:                 # Collect only specific routez metrics
+      - in_msgs
+      - out_msgs
+```
+
 ### Basic Configuration
 
 ```yaml
@@ -65,6 +89,8 @@ service:
 
 ### Full Configuration Reference
 
+All options with their defaults:
+
 ```yaml
 receivers:
   nats:
@@ -72,49 +98,43 @@ receivers:
     endpoint: http://localhost:8222
 
     # How often to collect metrics (default: 60s)
-    collection_interval: 30s
+    collection_interval: 60s
 
-    # Core server metrics
-    varz: true              # General server stats (default: true)
-    connz: true             # Connection info
-    connz_detailed: false   # Detailed connection info (higher overhead)
-    routez: false           # Route info for clustered servers
-    subz: false             # Subscription info
-    leafz: false            # Leaf node info
-    gatewayz: false         # Gateway info for super-clusters
+    # Core server metrics (all accept true/false/list)
+    varz: true                # General server stats (default: true)
+    connz: false              # Connection info (default: false)
+    connz_detailed: false     # Detailed connection info (default: false)
+    routez: false             # Route info for clustered servers (default: false)
+    subz: false               # Subscription info (default: false)
+    leafz: false              # Leaf node info (default: false)
+    gatewayz: false           # Gateway info for super-clusters (default: false)
 
-    # Health check metrics
-    healthz: false                  # Basic health status
-    healthz_js_enabled_only: false  # JetStream enabled health
-    healthz_js_server_only: false   # JetStream server health
+    # Health check metrics (all accept true/false/list)
+    healthz: false                  # Basic health status (default: false)
+    healthz_js_enabled_only: false  # JetStream enabled health (default: false)
+    healthz_js_server_only: false   # JetStream server health (default: false)
 
-    # Account metrics
-    accstatz: false         # Account stats
-    accountz: false         # Account info
+    # Account metrics (all accept true/false/list)
+    accstatz: false           # Account stats (default: false)
+    accountz: false           # Account info (default: false)
 
-    # JetStream metrics (string, not boolean)
+    # JetStream metrics (string only, not boolean or list)
     # Options: "all", "streams", "consumers", or specific stream name
-    # Leave empty or omit to disable
-    jsz: "all"
+    # Omit or leave empty to disable (default: disabled)
+    jsz: ""
 
     # Server identification (useful when monitoring multiple servers)
-    use_internal_server_id: false   # Use server_id from /varz as identifier
-    use_internal_server_name: true  # Use server_name from /varz as identifier
+    use_internal_server_id: false   # Use server_id from /varz (default: false)
+    use_internal_server_name: false # Use server_name from /varz (default: false)
 
     # Log emission (requires logs pipeline)
-    startup_log: true       # Emit log on initial connection
-    config_log: true        # Emit log when server config reloads
+    startup_log: true         # Emit log on initial connection (default: true)
+    config_log: true          # Emit log when server config reloads (default: true)
 ```
 
-### Metric Filtering
+### Metric Filtering Examples
 
-Each endpoint (except `jsz`) can be configured as:
-
-- `true` - Collect all metrics from this endpoint
-- `false` - Disable this endpoint
-- `["metric1", "metric2"]` - Collect only specific metrics (suffix only)
-
-Example with filtering:
+Filter to collect only specific metrics from an endpoint:
 
 ```yaml
 receivers:
@@ -129,8 +149,8 @@ receivers:
     # Collect all connection metrics
     connz: true
 
-    # Disable route metrics
-    routez: false
+    # Collect specific JetStream metrics (use jsz string options instead)
+    jsz: "streams"
 ```
 
 ## Metric Naming

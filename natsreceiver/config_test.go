@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/confmap"
 )
 
 func TestConfigValidate(t *testing.T) {
@@ -80,6 +81,77 @@ func TestConfigValidate(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+func TestMetricFilterUnmarshal(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    map[string]any
+		expected MetricFilter
+	}{
+		{
+			name:     "boolean true",
+			input:    map[string]any{"varz": true},
+			expected: MetricFilter{Enabled: true},
+		},
+		{
+			name:     "boolean false",
+			input:    map[string]any{"varz": false},
+			expected: MetricFilter{Enabled: false},
+		},
+		{
+			name:     "list of metrics",
+			input:    map[string]any{"varz": []any{"cpu", "mem"}},
+			expected: MetricFilter{Enabled: true, Metrics: []string{"cpu", "mem"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Add required fields
+			tt.input["endpoint"] = "http://localhost:8222"
+			tt.input["collection_interval"] = "10s"
+
+			conf := confmap.NewFromStringMap(tt.input)
+			cfg := &Config{}
+			err := conf.Unmarshal(cfg)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected.Enabled, cfg.GetVarz.Enabled)
+			assert.Equal(t, tt.expected.Metrics, cfg.GetVarz.Metrics)
+		})
+	}
+}
+
+func TestMetricFilterUnmarshalErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       map[string]any
+		expectedErr string
+	}{
+		{
+			name:        "empty list",
+			input:       map[string]any{"varz": []any{}},
+			expectedErr: "varz: metric filter list cannot be empty; use false to disable",
+		},
+		{
+			name:        "list with non-string",
+			input:       map[string]any{"varz": []any{"cpu", 123}},
+			expectedErr: "varz: metric filter list must contain only strings",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.input["endpoint"] = "http://localhost:8222"
+			tt.input["collection_interval"] = "10s"
+
+			conf := confmap.NewFromStringMap(tt.input)
+			cfg := &Config{}
+			err := conf.Unmarshal(cfg)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.expectedErr)
 		})
 	}
 }

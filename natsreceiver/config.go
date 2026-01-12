@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"go.opentelemetry.io/collector/confmap"
 )
 
 // MetricFilter configures which metrics to collect from an endpoint.
@@ -69,6 +71,7 @@ func (m *MetricFilter) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return fmt.Errorf("metric filter must be a boolean or list of strings")
 }
 
+
 // ShouldCollect returns true if the given metric suffix should be collected.
 func (m *MetricFilter) ShouldCollect(metricSuffix string) bool {
 	if !m.Enabled {
@@ -132,4 +135,56 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("collection_interval must be positive")
 	}
 	return nil
+}
+
+// metricFilterFields are the config keys that use MetricFilter type.
+var metricFilterFields = []string{
+	"varz", "connz", "connz_detailed", "routez", "subz", "leafz", "gatewayz",
+	"healthz", "healthz_js_enabled_only", "healthz_js_server_only",
+	"accstatz", "accountz",
+}
+
+// convertMetricFilters converts bool/list values to object form for MetricFilter fields.
+func convertMetricFilters(raw map[string]any) error {
+	for _, field := range metricFilterFields {
+		val, ok := raw[field]
+		if !ok {
+			continue
+		}
+
+		switch v := val.(type) {
+		case bool:
+			raw[field] = map[string]any{"enabled": v}
+		case []any:
+			if len(v) == 0 {
+				return fmt.Errorf("%s: metric filter list cannot be empty; use false to disable", field)
+			}
+			metrics := make([]string, len(v))
+			for i, item := range v {
+				s, ok := item.(string)
+				if !ok {
+					return fmt.Errorf("%s: metric filter list must contain only strings", field)
+				}
+				metrics[i] = s
+			}
+			raw[field] = map[string]any{"enabled": true, "metrics": metrics}
+		case map[string]any:
+			return fmt.Errorf("%s: metric filter must be a boolean or list of strings, not an object", field)
+		}
+	}
+	return nil
+}
+
+// configAlias is used to break recursion when unmarshaling.
+type configAlias Config
+
+// Unmarshal implements confmap.Unmarshaler to support bool/list syntax for MetricFilter fields.
+func (c *Config) Unmarshal(conf *confmap.Conf) error {
+	raw := conf.ToStringMap()
+	if err := convertMetricFilters(raw); err != nil {
+		return err
+	}
+	// Use alias to avoid infinite recursion
+	alias := (*configAlias)(c)
+	return confmap.NewFromStringMap(raw).Unmarshal(alias)
 }
