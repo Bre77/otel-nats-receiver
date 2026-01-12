@@ -24,7 +24,7 @@ dist:
   otelcol_version: 0.143.0
 
 receivers:
-  - gomod: github.com/Bre77/otel-nats-receiver/natsreceiver v0.0.0
+  - gomod: github.com/Bre77/otel-nats-receiver/natsreceiver v0.1.0
 
 # Add your exporters, processors, and extensions as needed
 exporters:
