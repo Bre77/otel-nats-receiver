@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a custom OpenTelemetry Collector receiver for NATS. It scrapes metrics from NATS server HTTP monitoring endpoints, converts them from Prometheus format to OpenTelemetry metrics, and feeds them into the OTel collector pipeline.
+This is a custom OpenTelemetry Collector receiver for NATS. It scrapes metrics from NATS server HTTP monitoring endpoints, converts them from Prometheus format to OpenTelemetry metrics, and feeds them into the OTel collector pipeline. It also emits OTel logs on startup and config reload events.
 
 ## Build Commands
 
@@ -38,7 +38,7 @@ cd natsreceiver && go test -cover ./...
 ## Running the Collector
 
 ```bash
-# Run with example config
+# Run with example config (see example/config.yaml for full options)
 ./build/otelcol-nats --config example/config.yaml
 ```
 
@@ -49,18 +49,26 @@ cd natsreceiver && go test -cover ./...
 - `factory.go` - Creates the OTel receiver factory, registers component type `nats`
 - `config.go` - Configuration structs including `MetricFilter` (flexible bool/list type for filtering)
 - `receiver.go` - Main implementation:
-  - `natsReceiver` implements the receiver interface
-  - `natsScraper.initCollectors()` sets up Prometheus collectors based on enabled config options (varz, connz, jsz, etc.)
+  - `natsReceiver` implements the receiver interface, handles both metrics and logs pipelines
+  - `natsScraper.initCollectors()` sets up Prometheus collectors based on enabled config options
   - `natsScraper.Scrape()` collects metrics and transforms them to OTel format
   - `transformMetricName()` converts `gnatsd_*` prefixes to `nats.*` OTel naming
   - `shouldCollectMetric()` applies metric filters per endpoint
+  - `emitLog()` creates OTel log records for startup and config reload events
 
 **Data flow:**
 ```
 NATS HTTP endpoints → Prometheus collectors → Scrape() → OTel metrics → Exporter pipeline
+                   → fetchVarz() → emitLog() → OTel logs → Exporter pipeline
 ```
 
-**Configuration endpoints:** The receiver supports multiple NATS monitoring endpoints (varz, connz, routez, gatewayz, leafz, subz, jsz, accountz, accstatz, healthz) each configurable as boolean or metric filter list.
+**Configuration types:**
+- `MetricFilter` - Most endpoints use this flexible type that accepts either:
+  - `true`/`false` - enable/disable all metrics from endpoint
+  - `["metric1", "metric2"]` - collect only specific metrics (suffix only, e.g., `["cpu", "mem"]` for varz)
+- `GetJsz` (string) - JetStream uses a different pattern: `"all"`, `"streams"`, `"consumers"`, or specific stream name
+
+**Supported endpoints:** varz, connz, connz_detailed, routez, subz, leafz, gatewayz, healthz, healthz_js_enabled_only, healthz_js_server_only, accstatz, accountz, jsz
 
 ## Key Dependencies
 
