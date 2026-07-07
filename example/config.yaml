@@ -47,6 +47,12 @@ receivers:
     startup_log: true # Emit log on initial connection (default: true)
     config_log: true  # Emit log when server config reloads (default: true)
 
+    # Optional deployment environment name, attached to every emitted
+    # resource (metrics and logs) as deployment.environment.name. Unset by
+    # default - the NATS server has no notion of environment, so set this
+    # per-deployment if you need the attribute.
+    # environment: "prod"
+
 processors:
   batch:
     timeout: 10s

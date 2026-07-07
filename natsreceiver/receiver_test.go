@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/consumer/consumertest"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pmetric"
 	"go.uber.org/zap"
@@ -354,6 +356,104 @@ func TestSetLabels(t *testing.T) {
 	val, ok = attrs.Get("empty")
 	require.True(t, ok)
 	assert.Equal(t, "", val.Str())
+}
+
+func TestScrapeResourceAttributesDefault(t *testing.T) {
+	scraper := &natsScraper{
+		cfg:      &Config{},
+		logger:   zap.NewNop(),
+		registry: prometheus.NewRegistry(),
+		receiver: &natsReceiver{},
+	}
+
+	md, err := scraper.Scrape(context.Background())
+	require.NoError(t, err)
+
+	attrs := md.ResourceMetrics().At(0).Resource().Attributes()
+
+	val, ok := attrs.Get("service.name")
+	require.True(t, ok)
+	assert.Equal(t, "nats", val.Str())
+
+	for _, key := range []string{"service.instance.id", "host.name", "service.version", "deployment.environment.name"} {
+		_, ok := attrs.Get(key)
+		assert.False(t, ok, "%s must not be set when no server identity or environment is configured", key)
+	}
+}
+
+func TestScrapeResourceAttributesWithIdentityAndEnvironment(t *testing.T) {
+	scraper := &natsScraper{
+		cfg:      &Config{Environment: "prod"},
+		logger:   zap.NewNop(),
+		registry: prometheus.NewRegistry(),
+		receiver: &natsReceiver{
+			serverID:      "NATS-SERVER-123",
+			serverName:    "nats-1",
+			serverVersion: "2.10.0",
+		},
+	}
+
+	md, err := scraper.Scrape(context.Background())
+	require.NoError(t, err)
+
+	attrs := md.ResourceMetrics().At(0).Resource().Attributes()
+
+	val, ok := attrs.Get("service.instance.id")
+	require.True(t, ok)
+	assert.Equal(t, "NATS-SERVER-123", val.Str())
+
+	val, ok = attrs.Get("host.name")
+	require.True(t, ok)
+	assert.Equal(t, "nats-1", val.Str())
+
+	val, ok = attrs.Get("service.version")
+	require.True(t, ok)
+	assert.Equal(t, "2.10.0", val.Str())
+
+	val, ok = attrs.Get("deployment.environment.name")
+	require.True(t, ok)
+	assert.Equal(t, "prod", val.Str())
+}
+
+func TestEmitLogResourceAttributesDefault(t *testing.T) {
+	sink := new(consumertest.LogsSink)
+	r := &natsReceiver{
+		cfg:          &Config{},
+		logsConsumer: sink,
+		logger:       zap.NewNop(),
+	}
+
+	varz := &varzResponse{ServerID: "NATS-SERVER-123", ServerName: "nats-1", Version: "2.10.0"}
+	require.NoError(t, r.emitLog(context.Background(), varz, "NATS server connected"))
+
+	require.Len(t, sink.AllLogs(), 1)
+	attrs := sink.AllLogs()[0].ResourceLogs().At(0).Resource().Attributes()
+
+	_, ok := attrs.Get("deployment.environment.name")
+	assert.False(t, ok, "deployment.environment.name must not be set when Environment is empty")
+}
+
+func TestEmitLogResourceAttributesWithEnvironment(t *testing.T) {
+	sink := new(consumertest.LogsSink)
+	r := &natsReceiver{
+		cfg:          &Config{Environment: "prod"},
+		logsConsumer: sink,
+		logger:       zap.NewNop(),
+	}
+
+	varz := &varzResponse{ServerID: "NATS-SERVER-123", ServerName: "nats-1", Version: "2.10.0"}
+	require.NoError(t, r.emitLog(context.Background(), varz, "NATS server connected"))
+
+	require.Len(t, sink.AllLogs(), 1)
+	attrs := sink.AllLogs()[0].ResourceLogs().At(0).Resource().Attributes()
+
+	val, ok := attrs.Get("deployment.environment.name")
+	require.True(t, ok)
+	assert.Equal(t, "prod", val.Str())
+
+	val, ok = attrs.Get("host.name")
+	require.True(t, ok)
+	assert.Equal(t, "nats-1", val.Str())
 }
 
 func TestScraperStartShutdown(t *testing.T) {

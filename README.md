@@ -130,6 +130,12 @@ receivers:
     # Log emission (requires logs pipeline)
     startup_log: true         # Emit log on initial connection (default: true)
     config_log: true          # Emit log when server config reloads (default: true)
+
+    # Optional deployment environment name, attached to every emitted
+    # resource (metrics and logs) as deployment.environment.name. Unset by
+    # default - the NATS server has no notion of environment, so set this
+    # per-deployment if you need the attribute.
+    environment: ""
 ```
 
 ### Metric Filtering Examples
@@ -163,6 +169,18 @@ Metrics are converted from the NATS Prometheus exporter format to OpenTelemetry 
 | `gnatsd_connz_total` | `nats.connz.total` |
 | `gnatsd_jsz_streams` | `nats.jsz.streams` |
 
+## Metric Resource Attributes
+
+Every scrape emits metrics with the following resource attributes:
+
+- `service.name`: "nats"
+- `service.instance.id`: Server ID (fetched from `/varz` at startup)
+- `service.version`: NATS version (fetched from `/varz` at startup)
+- `host.name`: Server name (fetched from `/varz` at startup)
+- `deployment.environment.name`: Set only if `environment` is configured
+
+If the initial `/varz` fetch at startup fails, `service.instance.id`, `service.version`, and `host.name` are omitted from metrics resources for the lifetime of the receiver.
+
 ## Log Records
 
 When `startup_log` or `config_log` are enabled, the receiver emits OpenTelemetry log records with:
@@ -172,6 +190,7 @@ When `startup_log` or `config_log` are enabled, the receiver emits OpenTelemetry
 - `service.instance.id`: Server ID
 - `service.version`: NATS version
 - `host.name`: Server name
+- `deployment.environment.name`: Set only if `environment` is configured
 
 **Log attributes:**
 - `host`: NATS host

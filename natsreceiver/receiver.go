@@ -49,6 +49,14 @@ type natsReceiver struct {
 	sController        receiver.Metrics
 	lastConfigLoadTime time.Time
 	configMu           sync.Mutex
+
+	// Server identity, fetched once from varz at Start and reused as metrics
+	// resource attributes so metrics carry the same per-server identity as
+	// emitted logs. Written once before the scrape controller starts, so no
+	// synchronization is needed for the subsequent read-only Scrape calls.
+	serverID      string
+	serverName    string
+	serverVersion string
 }
 
 type natsScraper struct {
@@ -86,11 +94,13 @@ func (r *natsReceiver) Start(ctx context.Context, host component.Host) error {
 	}
 
 	// Emit startup log if enabled and logs consumer is available
+	var varz *varzResponse
 	if r.cfg.StartupLog && r.logsConsumer != nil {
-		varz, err := r.fetchVarz()
+		v, err := r.fetchVarz()
 		if err != nil {
 			r.logger.Warn("Failed to fetch varz for startup log", zap.Error(err))
 		} else {
+			varz = v
 			r.configMu.Lock()
 			r.lastConfigLoadTime = varz.ConfigLoadTime
 			r.configMu.Unlock()
@@ -102,6 +112,22 @@ func (r *natsReceiver) Start(ctx context.Context, host component.Host) error {
 
 	// Only start metrics controller if metrics consumer is available
 	if r.metricsConsumer != nil {
+		// Fetch server identity for metrics resource attributes if we didn't
+		// already fetch it above for the startup log.
+		if varz == nil {
+			v, err := r.fetchVarz()
+			if err != nil {
+				r.logger.Warn("Failed to fetch varz for resource identity", zap.Error(err))
+			} else {
+				varz = v
+			}
+		}
+		if varz != nil {
+			r.serverID = varz.ServerID
+			r.serverName = varz.ServerName
+			r.serverVersion = varz.Version
+		}
+
 		scrp, err := scraper.NewMetrics(
 			r.scraper.Scrape,
 			scraper.WithStart(r.scraper.Start),
@@ -168,6 +194,9 @@ func (r *natsReceiver) emitLog(ctx context.Context, varz *varzResponse, message 
 	res.Attributes().PutStr("service.instance.id", varz.ServerID)
 	res.Attributes().PutStr("service.version", varz.Version)
 	res.Attributes().PutStr("host.name", varz.ServerName)
+	if r.cfg.Environment != "" {
+		res.Attributes().PutStr("deployment.environment.name", r.cfg.Environment)
+	}
 
 	sl := rl.ScopeLogs().AppendEmpty()
 	sl.Scope().SetName("github.com/Bre77/otel-nats-receiver")
@@ -423,7 +452,22 @@ func (s *natsScraper) Scrape(ctx context.Context) (pmetric.Metrics, error) {
 
 	md := pmetric.NewMetrics()
 	rm := md.ResourceMetrics().AppendEmpty()
-	rm.Resource().Attributes().PutStr("service.name", "nats")
+	attrs := rm.Resource().Attributes()
+	attrs.PutStr("service.name", "nats")
+	if s.receiver != nil {
+		if s.receiver.serverID != "" {
+			attrs.PutStr("service.instance.id", s.receiver.serverID)
+		}
+		if s.receiver.serverName != "" {
+			attrs.PutStr("host.name", s.receiver.serverName)
+		}
+		if s.receiver.serverVersion != "" {
+			attrs.PutStr("service.version", s.receiver.serverVersion)
+		}
+	}
+	if s.cfg.Environment != "" {
+		attrs.PutStr("deployment.environment.name", s.cfg.Environment)
+	}
 
 	sm := rm.ScopeMetrics().AppendEmpty()
 	sm.Scope().SetName("github.com/Bre77/otel-nats-receiver")
