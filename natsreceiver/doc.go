@@ -14,6 +14,10 @@
 //   - connz: Collect connection info
 //   - routez: Collect route info
 //   - jsz: Collect JetStream metrics (set to filter like "all", "streams", etc.)
+//   - environment: Optional deployment environment name (e.g. "prod"),
+//     attached to every emitted resource as deployment.environment.name.
+//     Left unset by default since the NATS server has no notion of
+//     environment; set it per-deployment if you need the attribute.
 //
 // # Usage
 //

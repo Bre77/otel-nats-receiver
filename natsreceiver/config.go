@@ -124,6 +124,13 @@ type Config struct {
 	// Startup and config reload logging
 	StartupLog bool `mapstructure:"startup_log"` // Emit log on initial connection (default: true)
 	ConfigLog  bool `mapstructure:"config_log"`  // Emit log when server config reloads (default: true)
+
+	// Environment, when set, is attached to every emitted resource (metrics
+	// and logs) as the deployment.environment.name attribute. It is optional:
+	// this receiver has no way to infer an environment from the NATS server
+	// itself, so the deployment must supply it explicitly if it wants the
+	// attribute.
+	Environment string `mapstructure:"environment"`
 }
 
 // Validate checks if the configuration is valid.
