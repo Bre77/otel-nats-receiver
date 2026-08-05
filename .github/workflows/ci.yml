@@ -17,6 +17,14 @@ jobs:
         with:
           go-version-file: natsreceiver/go.mod
 
+      - name: Vet
+        working-directory: natsreceiver
+        run: go vet ./...
+
+      - name: Build
+        working-directory: natsreceiver
+        run: go build ./...
+
       - name: Run tests
         working-directory: natsreceiver
         run: go test -v ./...
