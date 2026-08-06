@@ -78,8 +78,27 @@ Both metrics (`natsScraper.Scrape()`) and logs (`natsReceiver.emitLog()`) must e
 
 This mirrors the fix applied to the sibling `otel-hetzner-receiver` (task `otelrcv-hetzner-meta-w2`): per-resource identity must follow OTel semantic conventions and live on the Resource, not buried in a per-datapoint label; `deployment.environment.name` must be an optional receiver config field, never hardcoded.
 
+## CI
+
+`.github/workflows/ci.yml` runs `go vet`, `go build`, and `go test -v ./...` in
+`natsreceiver/` on push/PR to `main`. `.github/workflows/release.yml` is
+manually dispatched with a `version` input (e.g. `v0.2.0`): it re-runs the same
+vet/build/test gate, then a second job gated on the `production` GitHub
+Environment (required reviewer approval) tags the validated commit and cuts a
+GitHub Release (via `softprops/action-gh-release`) from it. Both workflows pin
+the Go toolchain to `natsreceiver/go.mod`. Tagging only ever happens inside
+this gated job - no push-to-tag trigger exists, so a release can't be cut
+without passing CI on the exact commit and getting approval.
+
 ## Key Dependencies
 
 - OpenTelemetry Collector SDK v0.143.0
 - `github.com/nats-io/prometheus-nats-exporter` - NATS Prometheus collectors
 - `github.com/prometheus/client_golang` - Prometheus metric types
+
+## Maintaining this file
+
+Keep this file for knowledge useful to almost every future agent session in this project.
+Do not repeat what the codebase already shows; point to the authoritative file or command instead.
+Prefer rewriting or pruning existing entries over appending new ones.
+When updating this file, preserve this bar for all agents and keep entries concise.
