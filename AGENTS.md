@@ -76,8 +76,6 @@ Both metrics (`natsScraper.Scrape()`) and logs (`natsReceiver.emitLog()`) must e
 
 `deployment.environment.name` is only set when the optional `environment` config field is non-empty - never hardcode an environment value in receiver code. A generic receiver has no way to infer environment from the target system; that decision belongs to the deployment config, not the receiver.
 
-This mirrors the fix applied to the sibling `otel-hetzner-receiver` (task `otelrcv-hetzner-meta-w2`): per-resource identity must follow OTel semantic conventions and live on the Resource, not buried in a per-datapoint label; `deployment.environment.name` must be an optional receiver config field, never hardcoded.
-
 ## CI
 
 `.github/workflows/ci.yml` runs `go vet`, `go build`, and `go test -v ./...` in
