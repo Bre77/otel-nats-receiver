@@ -1,98 +1,68 @@
 # AGENTS.md
 
-This file provides guidance to agents (Claude Code, etc.) when working with code in this repository.
+Guidance for agents working in this repository.
 
 ## Project Overview
 
-This is a custom OpenTelemetry Collector receiver for NATS. It scrapes metrics from NATS server HTTP monitoring endpoints, converts them from Prometheus format to OpenTelemetry metrics, and feeds them into the OTel collector pipeline. It also emits OTel logs on startup and config reload events.
+A custom OpenTelemetry Collector receiver (component type `nats`) that scrapes
+NATS server HTTP monitoring endpoints, converts the Prometheus-format metrics to
+OTel metrics, and emits OTel logs on server startup and config reload. User-facing
+configuration, endpoint list, metric naming and emitted attributes are documented
+in `README.md` - keep it in sync with `natsreceiver/config.go` rather than
+restating it here.
 
-## Build Commands
-
-```bash
-# Build the collector (generates code in build/ and compiles binary)
-./ocb --config builder-config.yaml
-
-# Build with verbose output
-./ocb --config builder-config.yaml --verbose
-
-# Generate code only, skip compilation
-./ocb --config builder-config.yaml --skip-compilation
-```
-
-## Test Commands
+## Commands
 
 ```bash
-# Run all tests
-cd natsreceiver && go test ./...
-
-# Run specific test
-cd natsreceiver && go test -run TestGetServerID
-
-# Run with verbose output
-cd natsreceiver && go test -v ./...
-
-# Run with coverage
-cd natsreceiver && go test -cover ./...
-```
-
-## Running the Collector
-
-```bash
-# Run with example config (see example/config.yaml for full options)
+./ocb --config builder-config.yaml   # generate build/ and compile the collector
 ./build/otelcol-nats --config example/config.yaml
+cd natsreceiver && go test ./...     # also: go vet ./..., go build ./...
 ```
+
+`ocb` and `build/` are gitignored - download the
+[collector builder](https://github.com/open-telemetry/opentelemetry-collector/tree/main/cmd/builder)
+into the repo root before building.
 
 ## Architecture
 
-**Core package: `natsreceiver/`**
+All code lives in `natsreceiver/`: `factory.go` (receiver factory and defaults),
+`config.go` (config structs plus the `MetricFilter` bool/list/object unmarshalling),
+`receiver.go` (`natsReceiver` for lifecycle and the logs pipeline, `natsScraper`
+for metrics).
 
-- `factory.go` - Creates the OTel receiver factory, registers component type `nats`
-- `config.go` - Configuration structs including `MetricFilter` (flexible bool/list type for filtering)
-- `receiver.go` - Main implementation:
-  - `natsReceiver` implements the receiver interface, handles both metrics and logs pipelines
-  - `natsScraper.initCollectors()` sets up Prometheus collectors based on enabled config options
-  - `natsScraper.Scrape()` collects metrics and transforms them to OTel format
-  - `transformMetricName()` converts `gnatsd_*` prefixes to `nats.*` OTel naming
-  - `shouldCollectMetric()` applies metric filters per endpoint
-  - `emitLog()` creates OTel log records for startup and config reload events
-
-**Data flow:**
 ```
-NATS HTTP endpoints → Prometheus collectors → Scrape() → OTel metrics → Exporter pipeline
-                   → fetchVarz() → emitLog() → OTel logs → Exporter pipeline
+NATS HTTP endpoints → Prometheus collectors → Scrape() → OTel metrics → pipeline
+                   → fetchVarz() → emitLog()           → OTel logs    → pipeline
 ```
 
-**Configuration types:**
-- `MetricFilter` - Most endpoints use this flexible type that accepts either:
-  - `true`/`false` - enable/disable all metrics from endpoint
-  - `["metric1", "metric2"]` - collect only specific metrics (suffix only, e.g., `["cpu", "mem"]` for varz)
-- `GetJsz` (string) - JetStream uses a different pattern: `"all"`, `"streams"`, `"consumers"`, or specific stream name
-
-**Supported endpoints:** varz, connz, connz_detailed, routez, subz, leafz, gatewayz, healthz, healthz_js_enabled_only, healthz_js_server_only, accstatz, accountz, jsz
+Most endpoint options are `MetricFilter` (accepts `true`/`false`/list of metric
+name suffixes). `jsz` is the exception: a plain string (`"all"`, `"streams"`,
+`"consumers"`, or a stream name), so it is not in `metricFilterFields` and does
+not go through the same conversion path.
 
 ## Resource Metadata Conventions
 
-Both metrics (`natsScraper.Scrape()`) and logs (`natsReceiver.emitLog()`) must emit the same resource identity: `service.name`, `service.instance.id` (server ID), `host.name` (server name), `service.version`, all sourced from `/varz` fetched once at `Start()` and cached on `natsReceiver` (`serverID`/`serverName`/`serverVersion`). Do not read these per-scrape from `/varz` - a scrape must not block on a network call for identity that doesn't change during the receiver's lifetime.
+Both metrics (`natsScraper.Scrape()`) and logs (`natsReceiver.emitLog()`) must emit
+the same resource identity: `service.name`, `service.instance.id` (server ID),
+`host.name` (server name), `service.version` - all sourced from `/varz` fetched
+once at `Start()` and cached on `natsReceiver` (`serverID`/`serverName`/`serverVersion`).
+Never read these per-scrape from `/varz`: a scrape must not block on a network call
+for identity that cannot change during the receiver's lifetime.
 
-`deployment.environment.name` is only set when the optional `environment` config field is non-empty - never hardcode an environment value in receiver code. A generic receiver has no way to infer environment from the target system; that decision belongs to the deployment config, not the receiver.
+`deployment.environment.name` is set only when the optional `environment` config
+field is non-empty - never hardcode an environment value in receiver code. A generic
+receiver cannot infer environment from the target system; that belongs to the
+deployment config.
 
-## CI
+## CI and releases
 
-`.github/workflows/ci.yml` runs `go vet`, `go build`, and `go test -v ./...` in
-`natsreceiver/` on push/PR to `main`. `.github/workflows/release.yml` is
-manually dispatched with a `version` input (e.g. `v0.2.0`): it re-runs the same
-vet/build/test gate, then a second job gated on the `production` GitHub
-Environment (required reviewer approval) tags the validated commit and cuts a
-GitHub Release (via `softprops/action-gh-release`) from it. Both workflows pin
-the Go toolchain to `natsreceiver/go.mod`. Tagging only ever happens inside
-this gated job - no push-to-tag trigger exists, so a release can't be cut
-without passing CI on the exact commit and getting approval.
-
-## Key Dependencies
-
-- OpenTelemetry Collector SDK v0.143.0
-- `github.com/nats-io/prometheus-nats-exporter` - NATS Prometheus collectors
-- `github.com/prometheus/client_golang` - Prometheus metric types
+`.github/workflows/ci.yml` runs vet/build/test in `natsreceiver/` on push/PR to
+`main`. `.github/workflows/release.yml` is manually dispatched with a `version`
+input: it re-runs the same gate, then a second job gated on the `production` GitHub
+Environment (required reviewer approval) tags that commit and cuts the release.
+Tagging must only ever happen inside that gated job - there is no push-to-tag
+trigger, so a release cannot be cut without passing CI on the exact commit and
+getting approval. Both workflows pin the Go toolchain to `natsreceiver/go.mod`.
 
 ## Maintaining this file
 
